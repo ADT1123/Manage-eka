@@ -4,12 +4,12 @@ import { getFirestore } from 'firebase/firestore';
 import { getFunctions } from 'firebase/functions';
 
 const firebaseConfig = {
-  apiKey: "AIzaSyDnwoFporKT4FccRhOOzTrShc-J-5Zwxnk",
-  authDomain: "manage-eka.firebaseapp.com",
-  projectId: "manage-eka",
-  storageBucket: "manage-eka.firebasestorage.app",
-  messagingSenderId: "898933805204",
-  appId: "1:898933805204:web:b9c933d996fdbc48e76481",
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
 };
 
 const app = initializeApp(firebaseConfig);
