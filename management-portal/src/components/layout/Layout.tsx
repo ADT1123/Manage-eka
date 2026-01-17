@@ -206,7 +206,7 @@ export const Layout = ({ children }: LayoutProps) => {
         <div className="flex flex-col h-full">
           {/* Sidebar Header */}
           <div className="h-16 flex items-center justify-between px-6 border-b border-gray-200 flex-shrink-0">
-            <h1 className="text-xl font-bold text-primary-600">Portal</h1>
+            <h1 className="text-xl font-bold text-primary-600">Manage eka</h1>
             <button
               onClick={closeMobileMenu}
               className="lg:hidden p-2 rounded-lg hover:bg-gray-100"
