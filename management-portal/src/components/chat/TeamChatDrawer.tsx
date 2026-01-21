@@ -24,7 +24,6 @@ type ChatMessage = {
   senderName: string;
   senderDepartment: string;
   createdAt?: Date;
-  isOptimistic?: boolean; // Flag for optimistic messages
 };
 
 type TypingUser = {
@@ -75,7 +74,7 @@ export const TeamChatDrawer = ({
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
-        const firestoreMessages = snapshot.docs.map((d) => {
+        const next = snapshot.docs.map((d) => {
           const data = d.data();
           return {
             id: d.id,
@@ -84,19 +83,10 @@ export const TeamChatDrawer = ({
             senderName: data.senderName || "Unknown",
             senderDepartment: data.senderDepartment || "",
             createdAt: data.createdAt?.toDate?.() ?? undefined,
-            isOptimistic: false,
           } as ChatMessage;
         });
 
-        // Merge with optimistic messages (keep only those not yet in Firestore)
-        setMessages((prevMessages) => {
-          const optimisticMessages = prevMessages.filter((m) => m.isOptimistic);
-          const firestoreIds = new Set(firestoreMessages.map((m) => m.id));
-          const stillOptimistic = optimisticMessages.filter(
-            (m) => !firestoreIds.has(m.id)
-          );
-          return [...firestoreMessages, ...stillOptimistic];
-        });
+        setMessages(next);
 
         setTimeout(() => {
           bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -151,15 +141,6 @@ export const TeamChatDrawer = ({
     }
   }, [open]);
 
-  // Auto-scroll when new messages arrive
-  useEffect(() => {
-    if (messages.length > 0) {
-      setTimeout(() => {
-        bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-      }, 50);
-    }
-  }, [messages.length]);
-
   const updateTypingStatus = async () => {
     if (!currentUser || !userData) return;
 
@@ -210,37 +191,7 @@ export const TeamChatDrawer = ({
     const msg = text.trim();
     if (!msg) return;
 
-    // Generate temporary ID for optimistic message
-    const tempId = `temp_${Date.now()}_${Math.random()}`;
-    
-    // Create optimistic message (appears instantly)
-    const optimisticMessage: ChatMessage = {
-      id: tempId,
-      text: msg,
-      senderId: currentUser.uid,
-      senderName: userData.displayName || "Unknown",
-      senderDepartment: userData.department || "",
-      createdAt: new Date(),
-      isOptimistic: true,
-    };
-
-    // Add to UI immediately (INSTANT FEEDBACK)
-    setMessages((prev) => [...prev, optimisticMessage]);
-    
-    // Clear input immediately
-    setText("");
-
-    // Clear typing indicator
-    try {
-      await deleteDoc(doc(db, "chatTyping", currentUser.uid));
-    } catch (error) {
-      // Ignore
-    }
-
-    // Focus back on textarea
-    setTimeout(() => textareaRef.current?.focus(), 10);
-
-    // Send to Firestore in background (no waiting)
+    setSending(true);
     try {
       await addDoc(collection(db, "teamChatMessages"), {
         text: msg,
@@ -250,29 +201,24 @@ export const TeamChatDrawer = ({
         createdAt: serverTimestamp(),
       });
 
-      // Remove optimistic message once real one arrives (handled by onSnapshot)
+      setText("");
+
+      try {
+        await deleteDoc(doc(db, "chatTyping", currentUser.uid));
+      } catch (error) {
+        // Ignore
+      }
+
+      setTimeout(() => textareaRef.current?.focus(), 50);
     } catch (error) {
       console.error("Error sending message:", error);
-      
-      // Remove optimistic message on error
-      setMessages((prev) => prev.filter((m) => m.id !== tempId));
-      
-      // Show error
-      alert("Failed to send message. Please try again.");
-      
-      // Restore text in input
-      setText(msg);
+      alert("Failed to send message. Check console for details.");
+    } finally {
+      setSending(false);
     }
   };
 
   const deleteMessage = async (messageId: string, isOwnMessage: boolean) => {
-    // Can't delete optimistic messages (not in DB yet)
-    const message = messages.find((m) => m.id === messageId);
-    if (message?.isOptimistic) {
-      alert("Please wait for message to send before deleting.");
-      return;
-    }
-
     const confirmed = window.confirm(
       isOwnMessage 
         ? "Delete your message?" 
@@ -349,14 +295,12 @@ export const TeamChatDrawer = ({
           ) : (
             messages.map((m, index) => {
               const mine = m.senderId === currentUser?.uid;
-              const canDelete = (mine || isSuperAdmin) && !m.isOptimistic;
+              const canDelete = mine || isSuperAdmin;
               
               return (
                 <div
                   key={m.id}
-                  className={`flex ${mine ? "justify-end" : "justify-start"} gap-1.5 sm:gap-2 animate-fadeIn ${
-                    m.isOptimistic ? 'opacity-70' : 'opacity-100'
-                  }`}
+                  className={`flex ${mine ? "justify-end" : "justify-start"} gap-1.5 sm:gap-2 animate-fadeIn`}
                   style={{ animationDelay: `${index * 0.02}s` }}
                 >
                   <div className={`max-w-[78%] sm:max-w-[75%] min-w-0 ${mine ? "items-end" : "items-start"} flex flex-col`}>
@@ -392,9 +336,6 @@ export const TeamChatDrawer = ({
                       }}
                     >
                       {m.text}
-                      {m.isOptimistic && (
-                        <span className="text-[9px] opacity-60 ml-2">Sending...</span>
-                      )}
                     </div>
 
                     {/* Time */}
@@ -437,7 +378,7 @@ export const TeamChatDrawer = ({
           </div>
         )}
 
-        {/* Input - Mobile Optimized - NO MAX LENGTH */}
+        {/* Input - Mobile Optimized */}
         <div className="p-2 sm:p-3 border-t flex-shrink-0 bg-white safe-area-bottom">
           <div className="flex items-end gap-1.5 sm:gap-2">
             <textarea
@@ -449,6 +390,7 @@ export const TeamChatDrawer = ({
               placeholder="Type a message..."
               className="flex-1 resize-none px-3 py-2 sm:py-2.5 border border-gray-300 rounded-lg sm:rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent text-xs sm:text-sm transition-all duration-200"
               disabled={sending}
+              maxLength={1000}
               style={{ minHeight: '36px', maxHeight: '120px' }}
             />
             <button
