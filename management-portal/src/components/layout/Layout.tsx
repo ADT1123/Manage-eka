@@ -34,11 +34,9 @@ import {
   MessageCircle
 } from 'lucide-react';
 
-
 interface LayoutProps {
   children: React.ReactNode;
 }
-
 
 interface Notification {
   id: string;
@@ -49,7 +47,6 @@ interface Notification {
   createdAt: Timestamp;
   userId: string;
 }
-
 
 export const Layout = ({ children }: LayoutProps) => {
   const location = useLocation();
@@ -63,11 +60,9 @@ export const Layout = ({ children }: LayoutProps) => {
   const [unreadChatCount, setUnreadChatCount] = useState(0);
   const [lastReadChatTime, setLastReadChatTime] = useState<Date>(new Date());
 
-
   // Real-time notifications listener
   useEffect(() => {
     if (!currentUser?.uid) return;
-
 
     const notificationsRef = collection(db, 'notifications');
     const q = query(
@@ -76,7 +71,6 @@ export const Layout = ({ children }: LayoutProps) => {
       orderBy('createdAt', 'desc'),
       limit(10)
     );
-
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const notificationData = snapshot.docs.map(doc => ({
@@ -88,10 +82,8 @@ export const Layout = ({ children }: LayoutProps) => {
       setUnreadCount(notificationData.filter(n => !n.read).length);
     });
 
-
     return () => unsubscribe();
   }, [currentUser]);
-
 
   // Real-time chat messages listener for unread count
   useEffect(() => {
@@ -101,7 +93,6 @@ export const Layout = ({ children }: LayoutProps) => {
     const q = query(chatRef, orderBy('createdAt', 'desc'), limit(50));
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      // Count messages after last read time that are not from current user
       const unreadMessages = snapshot.docs.filter((doc) => {
         const data = doc.data();
         const messageTime = data.createdAt?.toDate?.();
@@ -116,7 +107,6 @@ export const Layout = ({ children }: LayoutProps) => {
     return () => unsubscribe();
   }, [currentUser, lastReadChatTime]);
 
-
   const handleLogout = async () => {
     try {
       await logout();
@@ -126,11 +116,9 @@ export const Layout = ({ children }: LayoutProps) => {
     }
   };
 
-
   const closeMobileMenu = () => {
     setIsMobileMenuOpen(false);
   };
-
 
   const markAsRead = async (notificationId: string) => {
     try {
@@ -140,7 +128,6 @@ export const Layout = ({ children }: LayoutProps) => {
       console.error('Error marking notification as read:', error);
     }
   };
-
 
   const markAllAsRead = async () => {
     try {
@@ -155,12 +142,10 @@ export const Layout = ({ children }: LayoutProps) => {
     }
   };
 
-
   const markChatAsRead = () => {
     setLastReadChatTime(new Date());
     setUnreadChatCount(0);
   };
-
 
   const getNotificationIcon = (type: string) => {
     switch (type) {
@@ -172,7 +157,6 @@ export const Layout = ({ children }: LayoutProps) => {
     }
   };
 
-
   const getNotificationColor = (type: string) => {
     switch (type) {
       case 'task': return 'bg-blue-100 text-blue-600';
@@ -183,7 +167,6 @@ export const Layout = ({ children }: LayoutProps) => {
     }
   };
 
-
   const formatNotificationTime = (timestamp: Timestamp) => {
     const now = new Date();
     const notificationDate = timestamp.toDate();
@@ -192,7 +175,6 @@ export const Layout = ({ children }: LayoutProps) => {
     const diffHours = Math.floor(diffMs / 3600000);
     const diffDays = Math.floor(diffMs / 86400000);
 
-
     if (diffMins < 1) return 'Just now';
     if (diffMins < 60) return `${diffMins}m ago`;
     if (diffHours < 24) return `${diffHours}h ago`;
@@ -200,15 +182,15 @@ export const Layout = ({ children }: LayoutProps) => {
     return notificationDate.toLocaleDateString();
   };
 
-
+  // Navigation items - Team Chat added BEFORE Settings
   const navItems = [
     { path: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
     { path: '/tasks', icon: CheckSquare, label: 'Tasks' },
     { path: '/team', icon: Users, label: 'Team' },
     { path: '/meetings', icon: Calendar, label: 'Meetings' },
+    { path: 'chat', icon: MessageCircle, label: 'Team Chat', isChat: true }, // Special chat item
     { path: '/settings', icon: Settings, label: 'Settings' },
   ];
-
 
   const getRankIcon = (index: number) => {
     switch (index) {
@@ -219,7 +201,6 @@ export const Layout = ({ children }: LayoutProps) => {
     }
   };
 
-
   const getRankColor = (index: number) => {
     switch (index) {
       case 0: return 'bg-yellow-50 border-yellow-200';
@@ -228,7 +209,6 @@ export const Layout = ({ children }: LayoutProps) => {
       default: return 'bg-white border-gray-100';
     }
   };
-
 
   return (
     <div className="min-h-screen bg-gray-50 flex">
@@ -239,14 +219,12 @@ export const Layout = ({ children }: LayoutProps) => {
         />
       )}
 
-
       {isNotificationOpen && (
         <div
           className="fixed inset-0 z-40"
           onClick={() => setIsNotificationOpen(false)}
         />
       )}
-
 
       <aside
         className={`
@@ -258,7 +236,7 @@ export const Layout = ({ children }: LayoutProps) => {
       >
         <div className="flex flex-col h-full">
           <div className="h-16 flex items-center justify-between px-6 border-b border-gray-200 flex-shrink-0">
-            <h1 className="text-xl font-bold text-primary-600">Manage eka</h1>
+            <h1 className="text-xl font-bold text-primary-600">Management Panel</h1>
             <button
               onClick={closeMobileMenu}
               className="lg:hidden p-2 rounded-lg hover:bg-gray-100"
@@ -267,13 +245,35 @@ export const Layout = ({ children }: LayoutProps) => {
             </button>
           </div>
 
-
           <nav className="py-6 px-3 border-b border-gray-200">
             <div className="space-y-1">
               {navItems.map((item) => {
                 const Icon = item.icon;
                 const isActive = location.pathname === item.path;
 
+                // Special handling for Team Chat button
+                if (item.isChat) {
+                  return (
+                    <button
+                      key={item.path}
+                      onClick={() => {
+                        setChatOpen(true);
+                        closeMobileMenu();
+                      }}
+                      className="w-full flex items-center space-x-3 px-4 py-3 rounded-lg text-gray-700 hover:bg-gray-50 transition-all relative"
+                    >
+                      <Icon className="h-5 w-5" />
+                      <span>{item.label}</span>
+                      {unreadChatCount > 0 && (
+                        <span className="absolute right-3 top-1/2 -translate-y-1/2 h-5 w-5 bg-red-500 text-white text-xs font-semibold rounded-full flex items-center justify-center">
+                          {unreadChatCount > 9 ? '9+' : unreadChatCount}
+                        </span>
+                      )}
+                    </button>
+                  );
+                }
+
+                // Regular nav items
                 return (
                   <Link
                     key={item.path}
@@ -292,23 +292,6 @@ export const Layout = ({ children }: LayoutProps) => {
                   </Link>
                 );
               })}
-
-              {/* Team Chat Button with Badge */}
-              <button
-                onClick={() => {
-                  setChatOpen(true);
-                  closeMobileMenu();
-                }}
-                className="w-full flex items-center space-x-3 px-4 py-3 rounded-lg text-gray-700 hover:bg-gray-50 transition-all relative"
-              >
-                <MessageCircle className="h-5 w-5" />
-                <span>Team Chat</span>
-                {unreadChatCount > 0 && (
-                  <span className="absolute right-3 top-1/2 -translate-y-1/2 h-5 w-5 bg-red-500 text-white text-xs font-semibold rounded-full flex items-center justify-center">
-                    {unreadChatCount > 9 ? '9+' : unreadChatCount}
-                  </span>
-                )}
-              </button>
             </div>
           </nav>
 
@@ -342,7 +325,6 @@ export const Layout = ({ children }: LayoutProps) => {
           </div>
         </div>
       </aside>
-
 
       <div className="flex-1 flex flex-col min-h-screen w-full lg:w-auto">
         <header className="lg:hidden fixed top-0 left-0 right-0 h-16 bg-white border-b border-gray-200 z-30 flex items-center justify-between px-4">
@@ -389,7 +371,6 @@ export const Layout = ({ children }: LayoutProps) => {
           </div>
         </header>
 
-
         <header className="hidden lg:block sticky top-0 z-20 bg-white border-b border-gray-200 px-8 py-4 flex-shrink-0">
           <div className="flex items-center justify-between">
             <div className="flex-1">
@@ -433,7 +414,6 @@ export const Layout = ({ children }: LayoutProps) => {
           </div>
         </header>
 
-
         {isNotificationOpen && (
           <div className="fixed top-16 right-4 lg:top-20 lg:right-8 w-96 max-w-[calc(100vw-2rem)] bg-white rounded-lg shadow-2xl border border-gray-200 z-50 max-h-[80vh] flex flex-col">
             <div className="p-4 border-b border-gray-200 flex items-center justify-between">
@@ -456,7 +436,6 @@ export const Layout = ({ children }: LayoutProps) => {
                 </button>
               )}
             </div>
-
 
             <div className="flex-1 overflow-y-auto">
               {notifications.length > 0 ? (
@@ -523,7 +502,6 @@ export const Layout = ({ children }: LayoutProps) => {
             )}
           </div>
         )}
-
 
         <main className="flex-1 p-4 sm:p-6 lg:p-8 mt-16 lg:mt-0 overflow-x-hidden">
           {children}
