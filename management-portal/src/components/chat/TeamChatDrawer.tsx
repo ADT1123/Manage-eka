@@ -24,6 +24,7 @@ type ChatMessage = {
   senderName: string;
   senderDepartment: string;
   createdAt?: Date;
+  isOptimistic?: boolean; // Flag for optimistic messages
 };
 
 type TypingUser = {
@@ -58,7 +59,6 @@ export const TeamChatDrawer = ({
   // Handle drawer animation on open/close
   useEffect(() => {
     if (open) {
-      // Trigger animation after mount
       setTimeout(() => setIsVisible(true), 10);
     } else {
       setIsVisible(false);
@@ -75,7 +75,7 @@ export const TeamChatDrawer = ({
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
-        const next = snapshot.docs.map((d) => {
+        const firestoreMessages = snapshot.docs.map((d) => {
           const data = d.data();
           return {
             id: d.id,
@@ -84,10 +84,19 @@ export const TeamChatDrawer = ({
             senderName: data.senderName || "Unknown",
             senderDepartment: data.senderDepartment || "",
             createdAt: data.createdAt?.toDate?.() ?? undefined,
+            isOptimistic: false,
           } as ChatMessage;
         });
 
-        setMessages(next);
+        // Merge with optimistic messages (keep only those not yet in Firestore)
+        setMessages((prevMessages) => {
+          const optimisticMessages = prevMessages.filter((m) => m.isOptimistic);
+          const firestoreIds = new Set(firestoreMessages.map((m) => m.id));
+          const stillOptimistic = optimisticMessages.filter(
+            (m) => !firestoreIds.has(m.id)
+          );
+          return [...firestoreMessages, ...stillOptimistic];
+        });
 
         setTimeout(() => {
           bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -142,6 +151,15 @@ export const TeamChatDrawer = ({
     }
   }, [open]);
 
+  // Auto-scroll when new messages arrive
+  useEffect(() => {
+    if (messages.length > 0) {
+      setTimeout(() => {
+        bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+      }, 50);
+    }
+  }, [messages.length]);
+
   const updateTypingStatus = async () => {
     if (!currentUser || !userData) return;
 
@@ -192,7 +210,37 @@ export const TeamChatDrawer = ({
     const msg = text.trim();
     if (!msg) return;
 
-    setSending(true);
+    // Generate temporary ID for optimistic message
+    const tempId = `temp_${Date.now()}_${Math.random()}`;
+    
+    // Create optimistic message (appears instantly)
+    const optimisticMessage: ChatMessage = {
+      id: tempId,
+      text: msg,
+      senderId: currentUser.uid,
+      senderName: userData.displayName || "Unknown",
+      senderDepartment: userData.department || "",
+      createdAt: new Date(),
+      isOptimistic: true,
+    };
+
+    // Add to UI immediately (INSTANT FEEDBACK)
+    setMessages((prev) => [...prev, optimisticMessage]);
+    
+    // Clear input immediately
+    setText("");
+
+    // Clear typing indicator
+    try {
+      await deleteDoc(doc(db, "chatTyping", currentUser.uid));
+    } catch (error) {
+      // Ignore
+    }
+
+    // Focus back on textarea
+    setTimeout(() => textareaRef.current?.focus(), 10);
+
+    // Send to Firestore in background (no waiting)
     try {
       await addDoc(collection(db, "teamChatMessages"), {
         text: msg,
@@ -202,24 +250,29 @@ export const TeamChatDrawer = ({
         createdAt: serverTimestamp(),
       });
 
-      setText("");
-
-      try {
-        await deleteDoc(doc(db, "chatTyping", currentUser.uid));
-      } catch (error) {
-        // Ignore
-      }
-
-      setTimeout(() => textareaRef.current?.focus(), 50);
+      // Remove optimistic message once real one arrives (handled by onSnapshot)
     } catch (error) {
       console.error("Error sending message:", error);
-      alert("Failed to send message. Check console for details.");
-    } finally {
-      setSending(false);
+      
+      // Remove optimistic message on error
+      setMessages((prev) => prev.filter((m) => m.id !== tempId));
+      
+      // Show error
+      alert("Failed to send message. Please try again.");
+      
+      // Restore text in input
+      setText(msg);
     }
   };
 
   const deleteMessage = async (messageId: string, isOwnMessage: boolean) => {
+    // Can't delete optimistic messages (not in DB yet)
+    const message = messages.find((m) => m.id === messageId);
+    if (message?.isOptimistic) {
+      alert("Please wait for message to send before deleting.");
+      return;
+    }
+
     const confirmed = window.confirm(
       isOwnMessage 
         ? "Delete your message?" 
@@ -244,7 +297,7 @@ export const TeamChatDrawer = ({
 
   const handleClose = () => {
     setIsVisible(false);
-    setTimeout(onClose, 250); // Wait for animation to finish
+    setTimeout(onClose, 250);
   };
 
   if (!open) return null;
@@ -261,16 +314,16 @@ export const TeamChatDrawer = ({
 
       {/* Drawer with slide-in animation */}
       <div 
-        className={`fixed top-0 right-0 h-full w-full sm:w-[420px] md:w-[440px] bg-white z-50 shadow-2xl flex flex-col overflow-x-hidden transition-transform duration-300 ease-out ${
+        className={`fixed top-0 right-0 h-full w-full sm:w-[420px] md:w-[440px] bg-white z-50 shadow-2xl flex flex-col overflow-hidden transition-transform duration-300 ease-out ${
           isVisible ? 'translate-x-0' : 'translate-x-full'
         }`}
       >
         {/* Header - Minimal & Mobile Optimized */}
         <div className="h-14 sm:h-16 px-3 sm:px-4 border-b flex items-center justify-between flex-shrink-0 bg-gradient-to-r from-primary-600 to-primary-700 shadow-md">
-          <div className="flex items-center gap-2 text-white">
-            <MessageCircle className="h-5 w-5 sm:h-6 sm:w-6" />
-            <div>
-              <span className="font-semibold text-sm sm:text-base">Team Chat</span>
+          <div className="flex items-center gap-2 text-white min-w-0">
+            <MessageCircle className="h-5 w-5 sm:h-6 sm:w-6 flex-shrink-0" />
+            <div className="min-w-0">
+              <span className="font-semibold text-sm sm:text-base block truncate">Team Chat</span>
               {messages.length > 0 && (
                 <p className="text-[10px] sm:text-xs opacity-90">{messages.length} messages</p>
               )}
@@ -278,14 +331,14 @@ export const TeamChatDrawer = ({
           </div>
           <button
             onClick={handleClose}
-            className="p-1.5 sm:p-2 rounded-lg hover:bg-white/20 active:bg-white/30 transition text-white"
+            className="p-1.5 sm:p-2 rounded-lg hover:bg-white/20 active:bg-white/30 transition text-white flex-shrink-0"
             aria-label="Close chat"
           >
             <X className="h-5 w-5 sm:h-6 sm:w-6" />
           </button>
         </div>
 
-        {/* Messages Area - Mobile Optimized */}
+        {/* Messages Area - Mobile Optimized with NO OVERFLOW */}
         <div className="flex-1 overflow-y-auto overflow-x-hidden p-2 sm:p-3 space-y-2 bg-gray-50">
           {messages.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-gray-400 px-4">
@@ -296,25 +349,27 @@ export const TeamChatDrawer = ({
           ) : (
             messages.map((m, index) => {
               const mine = m.senderId === currentUser?.uid;
-              const canDelete = mine || isSuperAdmin;
+              const canDelete = (mine || isSuperAdmin) && !m.isOptimistic;
               
               return (
                 <div
                   key={m.id}
-                  className={`flex ${mine ? "justify-end" : "justify-start"} gap-1.5 sm:gap-2 animate-fadeIn`}
+                  className={`flex ${mine ? "justify-end" : "justify-start"} gap-1.5 sm:gap-2 animate-fadeIn ${
+                    m.isOptimistic ? 'opacity-70' : 'opacity-100'
+                  }`}
                   style={{ animationDelay: `${index * 0.02}s` }}
                 >
-                  <div className={`max-w-[78%] sm:max-w-[75%] ${mine ? "items-end" : "items-start"} flex flex-col`}>
+                  <div className={`max-w-[78%] sm:max-w-[75%] min-w-0 ${mine ? "items-end" : "items-start"} flex flex-col`}>
                     {/* Sender Info - Mobile Optimized */}
                     {!mine && (
-                      <div className="flex items-center gap-1 sm:gap-1.5 mb-0.5 text-[10px] sm:text-xs px-1">
-                        <span className="font-semibold text-gray-700 truncate max-w-[120px] sm:max-w-none">
+                      <div className="flex items-center gap-1 sm:gap-1.5 mb-0.5 text-[10px] sm:text-xs px-1 max-w-full">
+                        <span className="font-semibold text-gray-700 truncate flex-shrink-0 max-w-[100px] sm:max-w-[150px]">
                           {m.senderName}
                         </span>
                         {m.senderDepartment && (
                           <>
-                            <span className="text-gray-400">•</span>
-                            <span className="text-gray-500 truncate max-w-[80px] sm:max-w-none">
+                            <span className="text-gray-400 flex-shrink-0">•</span>
+                            <span className="text-gray-500 truncate flex-shrink max-w-[60px] sm:max-w-[100px]">
                               {m.senderDepartment}
                             </span>
                           </>
@@ -322,15 +377,24 @@ export const TeamChatDrawer = ({
                       </div>
                     )}
 
-                    {/* Message Bubble - Enhanced */}
+                    {/* Message Bubble - FIXED WORD WRAPPING */}
                     <div
-                      className={`rounded-2xl px-2.5 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm break-words whitespace-pre-wrap shadow-sm transition-all duration-200 hover:shadow-md ${
+                      className={`rounded-2xl px-2.5 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm shadow-sm transition-all duration-200 hover:shadow-md ${
                         mine
                           ? "bg-primary-600 text-white rounded-tr-md"
                           : "bg-white text-gray-800 border border-gray-200 rounded-tl-md"
                       }`}
+                      style={{
+                        wordBreak: 'break-word',
+                        overflowWrap: 'break-word',
+                        whiteSpace: 'pre-wrap',
+                        maxWidth: '100%',
+                      }}
                     >
                       {m.text}
+                      {m.isOptimistic && (
+                        <span className="text-[9px] opacity-60 ml-2">Sending...</span>
+                      )}
                     </div>
 
                     {/* Time */}
@@ -343,7 +407,7 @@ export const TeamChatDrawer = ({
                   {canDelete && (
                     <button
                       onClick={() => deleteMessage(m.id, mine)}
-                      className="self-center p-1.5 sm:p-2 rounded-lg hover:bg-red-50 active:bg-red-100 text-red-500 transition-all duration-200 opacity-60 hover:opacity-100 active:scale-95"
+                      className="self-center p-1.5 sm:p-2 rounded-lg hover:bg-red-50 active:bg-red-100 text-red-500 transition-all duration-200 opacity-60 hover:opacity-100 active:scale-95 flex-shrink-0"
                       title={mine ? "Delete your message" : "Delete message (Admin)"}
                       aria-label="Delete message"
                     >
@@ -360,7 +424,7 @@ export const TeamChatDrawer = ({
         {/* Typing Indicator - Animated */}
         {typingUsers.length > 0 && (
           <div className="px-3 sm:px-4 py-1.5 sm:py-2 bg-gray-50 border-t text-[10px] sm:text-xs text-gray-600 flex items-center gap-2 animate-fadeIn">
-            <div className="flex gap-0.5 sm:gap-1">
+            <div className="flex gap-0.5 sm:gap-1 flex-shrink-0">
               <span className="w-1 h-1 sm:w-1.5 sm:h-1.5 bg-primary-600 rounded-full animate-bounce" style={{ animationDelay: "0ms" }}></span>
               <span className="w-1 h-1 sm:w-1.5 sm:h-1.5 bg-primary-600 rounded-full animate-bounce" style={{ animationDelay: "150ms" }}></span>
               <span className="w-1 h-1 sm:w-1.5 sm:h-1.5 bg-primary-600 rounded-full animate-bounce" style={{ animationDelay: "300ms" }}></span>
@@ -373,7 +437,7 @@ export const TeamChatDrawer = ({
           </div>
         )}
 
-        {/* Input - Mobile Optimized */}
+        {/* Input - Mobile Optimized - NO MAX LENGTH */}
         <div className="p-2 sm:p-3 border-t flex-shrink-0 bg-white safe-area-bottom">
           <div className="flex items-end gap-1.5 sm:gap-2">
             <textarea
@@ -385,12 +449,12 @@ export const TeamChatDrawer = ({
               placeholder="Type a message..."
               className="flex-1 resize-none px-3 py-2 sm:py-2.5 border border-gray-300 rounded-lg sm:rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent text-xs sm:text-sm transition-all duration-200"
               disabled={sending}
-              maxLength={1000}
+              style={{ minHeight: '36px', maxHeight: '120px' }}
             />
             <button
               onClick={send}
               disabled={sending || !text.trim()}
-              className="p-2 sm:p-2.5 bg-primary-600 text-white rounded-lg sm:rounded-xl hover:bg-primary-700 active:bg-primary-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 active:scale-95 shadow-md hover:shadow-lg"
+              className="p-2 sm:p-2.5 bg-primary-600 text-white rounded-lg sm:rounded-xl hover:bg-primary-700 active:bg-primary-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 active:scale-95 shadow-md hover:shadow-lg flex-shrink-0"
               aria-label="Send message"
             >
               {sending ? (
@@ -431,11 +495,12 @@ export const TeamChatDrawer = ({
           -webkit-overflow-scrolling: touch;
         }
 
-        /* Better mobile textarea */
+        /* Better mobile textarea with auto-grow */
         textarea {
           -webkit-appearance: none;
           -moz-appearance: none;
           appearance: none;
+          overflow-y: auto;
         }
 
         /* Prevent zoom on iOS */
