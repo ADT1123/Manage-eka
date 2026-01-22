@@ -8,14 +8,13 @@ import {
   deleteDoc,
   doc,
   orderBy,
-  where,
   Timestamp
 } from 'firebase/firestore';
 import { db } from '../config/firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { createNotification } from '../utils/notifications';
-import { Plus, Calendar, Clock, MapPin, Users, Trash2, Edit2, FileText, X } from 'lucide-react';
-import { format } from 'date-fns';
+import { Plus, Calendar, Clock, MapPin, Users, Trash2, Edit2, FileText, X, CheckCircle2, Circle, XCircle } from 'lucide-react';
+import { format, isPast, isToday, isTomorrow, isThisWeek, isThisMonth, startOfDay, endOfDay } from 'date-fns';
 
 interface Meeting {
   id: string;
@@ -26,7 +25,8 @@ interface Meeting {
   attendees: string[];
   createdBy: string;
   createdByName: string;
-  mom?: string; // Minutes of Meeting
+  mom?: string;
+  status: 'scheduled' | 'completed' | 'cancelled';
   createdAt: Date;
 }
 
@@ -36,12 +36,14 @@ export const Meetings = () => {
   const [users, setUsers] = useState<any[]>([]);
   const [showModal, setShowModal] = useState(false);
   const [showMomModal, setShowMomModal] = useState(false);
+  const [showStatusModal, setShowStatusModal] = useState(false);
   const [editingMeeting, setEditingMeeting] = useState<Meeting | null>(null);
   const [selectedMeeting, setSelectedMeeting] = useState<Meeting | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [momText, setMomText] = useState('');
+  const [selectedStatus, setSelectedStatus] = useState<'scheduled' | 'completed' | 'cancelled'>('scheduled');
   const [formData, setFormData] = useState({
     title: '',
     description: '',
@@ -61,7 +63,7 @@ export const Meetings = () => {
   const fetchMeetings = async () => {
     try {
       const meetingsRef = collection(db, 'meetings');
-      const q = query(meetingsRef, orderBy('date', 'desc'));
+      const q = query(meetingsRef, orderBy('date', 'asc'));
       const snapshot = await getDocs(q);
 
       const meetingsData = snapshot.docs.map(doc => ({
@@ -69,6 +71,7 @@ export const Meetings = () => {
         ...doc.data(),
         date: doc.data().date?.toDate() || new Date(),
         createdAt: doc.data().createdAt?.toDate() || new Date(),
+        status: doc.data().status || 'scheduled',
       })) as Meeting[];
 
       setMeetings(meetingsData);
@@ -110,7 +113,8 @@ export const Meetings = () => {
         attendees: formData.attendees,
         createdBy: currentUser.uid,
         createdByName: userData?.displayName || '',
-        mom: '', // Initialize empty MOM
+        mom: '',
+        status: 'scheduled',
         createdAt: Timestamp.now(),
       });
 
@@ -118,7 +122,7 @@ export const Meetings = () => {
       for (const attendeeId of formData.attendees) {
         await createNotification(
           attendeeId,
-          'New Meeting Scheduled 📅',
+          'New Meeting Scheduled',
           `Meeting: ${formData.title} on ${format(meetingDateTime, 'PPP')}`,
           'meeting'
         );
@@ -153,6 +157,16 @@ export const Meetings = () => {
         attendees: formData.attendees,
       });
 
+      // ✅ Notify attendees about meeting update
+      for (const attendeeId of formData.attendees) {
+        await createNotification(
+          attendeeId,
+          'Meeting Updated',
+          `Meeting details updated: ${formData.title}`,
+          'meeting'
+        );
+      }
+
       setSuccess('Meeting updated successfully!');
       setShowModal(false);
       setEditingMeeting(null);
@@ -182,13 +196,54 @@ export const Meetings = () => {
     }
   };
 
-  // Handle MOM
+  const openStatusModal = (meeting: Meeting) => {
+    setSelectedMeeting(meeting);
+    setSelectedStatus(meeting.status);
+    setShowStatusModal(true);
+  };
+
+  const handleUpdateStatus = async () => {
+    if (!selectedMeeting || !currentUser || userRole !== 'superadmin') return;
+
+    setLoading(true);
+    try {
+      await updateDoc(doc(db, 'meetings', selectedMeeting.id), {
+        status: selectedStatus,
+        updatedAt: Timestamp.now(),
+        updatedBy: currentUser.uid,
+      });
+
+      const statusText = selectedStatus === 'completed' ? 'Completed' : selectedStatus === 'cancelled' ? 'Cancelled' : 'Scheduled';
+      for (const attendeeId of selectedMeeting.attendees) {
+        await createNotification(
+          attendeeId,
+          'Meeting Status Updated',
+          `${selectedMeeting.title} is now ${statusText}`,
+          'meeting'
+        );
+      }
+
+      setSuccess(`Meeting status updated to ${selectedStatus}!`);
+      setShowStatusModal(false);
+      setSelectedMeeting(null);
+      fetchMeetings();
+
+      setTimeout(() => setSuccess(''), 3000);
+    } catch (error) {
+      console.error('Error updating status:', error);
+      setError('Failed to update status');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const openMomModal = (meeting: Meeting) => {
     setSelectedMeeting(meeting);
     setMomText(meeting.mom || '');
     setShowMomModal(true);
   };
 
+  // ✅ Updated handleSaveMom with notification
   const handleSaveMom = async () => {
     if (!selectedMeeting || !currentUser) return;
 
@@ -196,9 +251,24 @@ export const Meetings = () => {
     try {
       await updateDoc(doc(db, 'meetings', selectedMeeting.id), {
         mom: momText.trim(),
+        momUpdatedAt: Timestamp.now(),
+        momUpdatedBy: currentUser.uid,
       });
 
-      setSuccess('MOM saved successfully!');
+      // ✅ Notify all attendees about MOM update
+      const momNotificationTitle = 'MOM Updated';
+      const momNotificationMessage = `Minutes of Meeting added for: ${selectedMeeting.title}`;
+      
+      for (const attendeeId of selectedMeeting.attendees) {
+        await createNotification(
+          attendeeId,
+          momNotificationTitle,
+          momNotificationMessage,
+          'meeting'
+        );
+      }
+
+      setSuccess('MOM saved and attendees notified successfully!');
       setShowMomModal(false);
       setSelectedMeeting(null);
       setMomText('');
@@ -248,9 +318,185 @@ export const Meetings = () => {
 
   const canEditMeeting = (userRole === 'superadmin' || userRole === 'admin');
   const canEditMom = (userRole === 'superadmin');
+  const canUpdateStatus = (userRole === 'superadmin');
 
-  const isPastMeeting = (date: Date) => {
-    return date < new Date();
+  const categorizeMeetings = () => {
+    const now = new Date();
+    const todayStart = startOfDay(now);
+    const todayEnd = endOfDay(now);
+
+    const today: Meeting[] = [];
+    const tomorrow: Meeting[] = [];
+    const thisWeek: Meeting[] = [];
+    const thisMonth: Meeting[] = [];
+    const upcoming: Meeting[] = [];
+    const past: Meeting[] = [];
+
+    meetings.forEach(meeting => {
+      const meetingDate = meeting.date;
+      
+      if (meetingDate < todayStart) {
+        past.push(meeting);
+      }
+      else if (meetingDate >= todayStart && meetingDate <= todayEnd) {
+        today.push(meeting);
+      }
+      else if (isTomorrow(meetingDate)) {
+        tomorrow.push(meeting);
+      }
+      else if (isThisWeek(meetingDate) && !isToday(meetingDate) && !isTomorrow(meetingDate)) {
+        thisWeek.push(meeting);
+      }
+      else if (isThisMonth(meetingDate) && !isThisWeek(meetingDate)) {
+        thisMonth.push(meeting);
+      }
+      else {
+        upcoming.push(meeting);
+      }
+    });
+
+    return { today, tomorrow, thisWeek, thisMonth, upcoming, past };
+  };
+
+  const { today, tomorrow, thisWeek, thisMonth, upcoming, past } = categorizeMeetings();
+
+  const getStatusIcon = (status: string) => {
+    switch (status) {
+      case 'completed':
+        return <CheckCircle2 className="h-5 w-5 text-green-600" />;
+      case 'cancelled':
+        return <XCircle className="h-5 w-5 text-red-600" />;
+      default:
+        return <Circle className="h-5 w-5 text-blue-600" />;
+    }
+  };
+
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'completed':
+        return 'bg-green-100 text-green-700';
+      case 'cancelled':
+        return 'bg-red-100 text-red-700';
+      default:
+        return 'bg-blue-100 text-blue-700';
+    }
+  };
+
+  const renderMeetingCard = (meeting: Meeting) => (
+    <div key={meeting.id} className={`card hover:shadow-md transition-shadow ${meeting.status === 'cancelled' ? 'opacity-60' : ''}`}>
+      <div className="flex items-start justify-between mb-4">
+        <div className="flex-1">
+          <div className="flex items-center space-x-2 mb-2">
+            <h3 className="text-xl font-semibold text-gray-900">{meeting.title}</h3>
+            <span className={`px-2.5 py-1 text-xs font-medium rounded-full ${getStatusColor(meeting.status)}`}>
+              {meeting.status.charAt(0).toUpperCase() + meeting.status.slice(1)}
+            </span>
+          </div>
+          {meeting.description && <p className="text-gray-600 mb-3">{meeting.description}</p>}
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+            <div className="flex items-center text-gray-700">
+              <Calendar className="h-4 w-4 mr-2 text-primary-600" />
+              <span>{format(meeting.date, 'PPP')}</span>
+            </div>
+            <div className="flex items-center text-gray-700">
+              <Clock className="h-4 w-4 mr-2 text-primary-600" />
+              <span>{format(meeting.date, 'p')}</span>
+            </div>
+            {meeting.location && (
+              <div className="flex items-center text-gray-700">
+                <MapPin className="h-4 w-4 mr-2 text-primary-600" />
+                <span>{meeting.location}</span>
+              </div>
+            )}
+            <div className="flex items-center text-gray-700">
+              <Users className="h-4 w-4 mr-2 text-primary-600" />
+              <span>{meeting.attendees.length} attendees</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center space-x-2 flex-shrink-0 ml-4">
+          {canUpdateStatus && (
+            <button
+              onClick={() => openStatusModal(meeting)}
+              className="p-2 text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
+              title="Update status"
+            >
+              {getStatusIcon(meeting.status)}
+            </button>
+          )}
+
+          <button
+            onClick={() => openMomModal(meeting)}
+            className={`p-2 rounded-lg transition-colors ${
+              meeting.mom 
+                ? 'text-green-600 hover:bg-green-50' 
+                : 'text-gray-400 hover:bg-gray-100'
+            }`}
+            title={meeting.mom ? 'View MOM' : 'Add MOM'}
+          >
+            <FileText className="h-5 w-5" />
+          </button>
+
+          {canEditMeeting && (
+            <>
+              <button
+                onClick={() => openEditModal(meeting)}
+                className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                title="Edit meeting"
+              >
+                <Edit2 className="h-5 w-5" />
+              </button>
+              <button
+                onClick={() => handleDeleteMeeting(meeting.id)}
+                className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                title="Delete meeting"
+              >
+                <Trash2 className="h-5 w-5" />
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {meeting.attendees.length > 0 && (
+        <div className="pt-3 border-t border-gray-200">
+          <p className="text-xs font-medium text-gray-700 mb-2">Attendees:</p>
+          <div className="flex flex-wrap gap-2">
+            {meeting.attendees.map((attendeeId) => {
+              const user = users.find(u => u.uid === attendeeId);
+              return user ? (
+                <span
+                  key={attendeeId}
+                  className="inline-flex items-center px-3 py-1 bg-primary-50 text-primary-700 rounded-full text-xs font-medium"
+                >
+                  {user.displayName}
+                </span>
+              ) : null;
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  const renderMeetingSection = (title: string, meetingsList: Meeting[]) => {
+    if (meetingsList.length === 0) return null;
+
+    return (
+      <div className="mb-8">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-2xl font-bold text-gray-900">{title}</h2>
+          <span className="text-sm text-gray-500 font-medium bg-gray-100 px-3 py-1 rounded-full">
+            {meetingsList.length} {meetingsList.length === 1 ? 'meeting' : 'meetings'}
+          </span>
+        </div>
+        <div className="space-y-4">
+          {meetingsList.map(meeting => renderMeetingCard(meeting))}
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -280,105 +526,12 @@ export const Meetings = () => {
         </div>
       )}
 
-      {/* Meetings List */}
-      <div className="space-y-4">
-        {meetings.map((meeting) => {
-          const isPast = isPastMeeting(meeting.date);
-
-          return (
-            <div key={meeting.id} className={`card hover:shadow-md transition-shadow ${isPast ? 'bg-gray-50' : ''}`}>
-              <div className="flex items-start justify-between mb-4">
-                <div className="flex-1">
-                  <div className="flex items-center space-x-2 mb-2">
-                    <h3 className="text-xl font-semibold text-gray-900">{meeting.title}</h3>
-                    {isPast && (
-                      <span className="px-2 py-1 text-xs bg-gray-200 text-gray-700 rounded-full">
-                        Past
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-gray-600 mb-3">{meeting.description}</p>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-                    <div className="flex items-center text-gray-700">
-                      <Calendar className="h-4 w-4 mr-2 text-primary-600" />
-                      <span>{format(meeting.date, 'PPP')}</span>
-                    </div>
-                    <div className="flex items-center text-gray-700">
-                      <Clock className="h-4 w-4 mr-2 text-primary-600" />
-                      <span>{format(meeting.date, 'p')}</span>
-                    </div>
-                    {meeting.location && (
-                      <div className="flex items-center text-gray-700">
-                        <MapPin className="h-4 w-4 mr-2 text-primary-600" />
-                        <span>{meeting.location}</span>
-                      </div>
-                    )}
-                    <div className="flex items-center text-gray-700">
-                      <Users className="h-4 w-4 mr-2 text-primary-600" />
-                      <span>{meeting.attendees.length} attendees</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex items-center space-x-2 flex-shrink-0 ml-4">
-                  {/* MOM Button - All can view, Super Admin can edit */}
-                  <button
-                    onClick={() => openMomModal(meeting)}
-                    className={`p-2 rounded-lg transition-colors ${
-                      meeting.mom 
-                        ? 'text-green-600 hover:bg-green-50' 
-                        : 'text-gray-400 hover:bg-gray-100'
-                    }`}
-                    title={meeting.mom ? 'View MOM' : 'Add MOM'}
-                  >
-                    <FileText className="h-5 w-5" />
-                  </button>
-
-                  {canEditMeeting && (
-                    <>
-                      <button
-                        onClick={() => openEditModal(meeting)}
-                        className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                        title="Edit meeting"
-                      >
-                        <Edit2 className="h-5 w-5" />
-                      </button>
-                      <button
-                        onClick={() => handleDeleteMeeting(meeting.id)}
-                        className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                        title="Delete meeting"
-                      >
-                        <Trash2 className="h-5 w-5" />
-                      </button>
-                    </>
-                  )}
-                </div>
-              </div>
-
-              {/* Attendees */}
-              {meeting.attendees.length > 0 && (
-                <div className="pt-3 border-t border-gray-200">
-                  <p className="text-xs font-medium text-gray-700 mb-2">Attendees:</p>
-                  <div className="flex flex-wrap gap-2">
-                    {meeting.attendees.map((attendeeId) => {
-                      const user = users.find(u => u.uid === attendeeId);
-                      return user ? (
-                        <span
-                          key={attendeeId}
-                          className="inline-flex items-center px-3 py-1 bg-primary-50 text-primary-700 rounded-full text-xs font-medium"
-                        >
-                          {user.displayName}
-                        </span>
-                      ) : null;
-                    })}
-                  </div>
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
+      {renderMeetingSection('Today', today)}
+      {renderMeetingSection('Tomorrow', tomorrow)}
+      {renderMeetingSection('This Week', thisWeek)}
+      {renderMeetingSection('This Month', thisMonth)}
+      {renderMeetingSection('Upcoming', upcoming)}
+      {renderMeetingSection('Past Meetings', past)}
 
       {meetings.length === 0 && (
         <div className="card text-center py-12">
@@ -533,6 +686,96 @@ export const Meetings = () => {
         </div>
       )}
 
+      {/* Status Update Modal */}
+      {showStatusModal && selectedMeeting && canUpdateStatus && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6">
+            <h2 className="text-2xl font-bold text-gray-900 mb-6">Update Meeting Status</h2>
+
+            <div className="mb-6">
+              <p className="text-sm text-gray-600 mb-2">Meeting:</p>
+              <p className="font-semibold text-gray-900">{selectedMeeting.title}</p>
+            </div>
+
+            <div className="space-y-3 mb-6">
+              <label className="flex items-center p-4 border-2 border-gray-200 rounded-lg cursor-pointer hover:bg-gray-50 transition-colors">
+                <input
+                  type="radio"
+                  name="status"
+                  value="scheduled"
+                  checked={selectedStatus === 'scheduled'}
+                  onChange={(e) => setSelectedStatus(e.target.value as any)}
+                  className="h-4 w-4 text-blue-600"
+                />
+                <div className="ml-3 flex items-center">
+                  <Circle className="h-5 w-5 text-blue-600 mr-2" />
+                  <div>
+                    <p className="font-medium text-gray-900">Scheduled</p>
+                    <p className="text-xs text-gray-500">Meeting is planned</p>
+                  </div>
+                </div>
+              </label>
+
+              <label className="flex items-center p-4 border-2 border-gray-200 rounded-lg cursor-pointer hover:bg-gray-50 transition-colors">
+                <input
+                  type="radio"
+                  name="status"
+                  value="completed"
+                  checked={selectedStatus === 'completed'}
+                  onChange={(e) => setSelectedStatus(e.target.value as any)}
+                  className="h-4 w-4 text-green-600"
+                />
+                <div className="ml-3 flex items-center">
+                  <CheckCircle2 className="h-5 w-5 text-green-600 mr-2" />
+                  <div>
+                    <p className="font-medium text-gray-900">Completed</p>
+                    <p className="text-xs text-gray-500">Meeting finished successfully</p>
+                  </div>
+                </div>
+              </label>
+
+              <label className="flex items-center p-4 border-2 border-gray-200 rounded-lg cursor-pointer hover:bg-gray-50 transition-colors">
+                <input
+                  type="radio"
+                  name="status"
+                  value="cancelled"
+                  checked={selectedStatus === 'cancelled'}
+                  onChange={(e) => setSelectedStatus(e.target.value as any)}
+                  className="h-4 w-4 text-red-600"
+                />
+                <div className="ml-3 flex items-center">
+                  <XCircle className="h-5 w-5 text-red-600 mr-2" />
+                  <div>
+                    <p className="font-medium text-gray-900">Cancelled</p>
+                    <p className="text-xs text-gray-500">Meeting was cancelled</p>
+                  </div>
+                </div>
+              </label>
+            </div>
+
+            <div className="flex space-x-3">
+              <button
+                onClick={() => {
+                  setShowStatusModal(false);
+                  setSelectedMeeting(null);
+                }}
+                className="flex-1 btn-secondary"
+                disabled={loading}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleUpdateStatus}
+                className="flex-1 btn-primary"
+                disabled={loading}
+              >
+                {loading ? 'Updating...' : 'Update Status'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* MOM Modal */}
       {showMomModal && selectedMeeting && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
@@ -572,6 +815,12 @@ export const Meetings = () => {
                   <span className="text-gray-600">Attendees:</span>
                   <span className="font-medium text-gray-900">
                     {selectedMeeting.attendees.length} people
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-600">Status:</span>
+                  <span className={`px-2.5 py-1 text-xs font-medium rounded-full ${getStatusColor(selectedMeeting.status)}`}>
+                    {selectedMeeting.status.charAt(0).toUpperCase() + selectedMeeting.status.slice(1)}
                   </span>
                 </div>
               </div>
