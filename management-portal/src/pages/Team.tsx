@@ -1,18 +1,20 @@
 import { useEffect, useState } from 'react';
-import { collection, getDocs, doc, deleteDoc, setDoc, Timestamp } from 'firebase/firestore';
-import { createUserWithEmailAndPassword } from 'firebase/auth';
+import { collection, getDocs, doc, deleteDoc, setDoc, updateDoc, Timestamp } from 'firebase/firestore';
+import { createUserWithEmailAndPassword, updatePassword } from 'firebase/auth';
 import { auth, db } from '../config/firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { createNotification } from '../utils/notifications';
 import type { User } from '../types';
-import { Plus, Mail, Briefcase, Shield, Trash2, AlertTriangle, Copy, Eye, EyeOff } from 'lucide-react';
+import { Plus, Mail, Briefcase, Shield, Trash2, AlertTriangle, Copy, Eye, EyeOff, Edit2 } from 'lucide-react';
 
 export const Team = () => {
   const { currentUser, userRole } = useAuth();
   const [users, setUsers] = useState<User[]>([]);
   const [showModal, setShowModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [userToDelete, setUserToDelete] = useState<User | null>(null);
+  const [userToEdit, setUserToEdit] = useState<User | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -25,6 +27,13 @@ export const Team = () => {
     role: 'member' as 'superadmin' | 'admin' | 'member',
     department: '',
     phone: '',
+  });
+  const [editFormData, setEditFormData] = useState({
+    displayName: '',
+    role: 'member' as 'superadmin' | 'admin' | 'member',
+    department: '',
+    phone: '',
+    newPassword: '', // Optional password change
   });
 
   useEffect(() => {
@@ -59,6 +68,16 @@ export const Team = () => {
     }
     setFormData({ ...formData, password });
     setGeneratedPassword(password);
+  };
+
+  const generateEditPassword = () => {
+    const length = 12;
+    const charset = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*';
+    let password = '';
+    for (let i = 0; i < length; i++) {
+      password += charset.charAt(Math.floor(Math.random() * charset.length));
+    }
+    setEditFormData({ ...editFormData, newPassword: password });
   };
 
   const handleCreateUser = async () => {
@@ -150,6 +169,69 @@ export const Team = () => {
     }
   };
 
+  // ✅ NEW: Handle Edit User
+  const handleEditUser = async () => {
+    if (!userToEdit || !currentUser) return;
+
+    if (!editFormData.displayName) {
+      setError('Name is required');
+      return;
+    }
+
+    if (editFormData.newPassword && editFormData.newPassword.length < 6) {
+      setError('Password must be at least 6 characters');
+      return;
+    }
+
+    setLoading(true);
+    setError('');
+
+    try {
+      // Update user document in Firestore
+      await updateDoc(doc(db, 'users', userToEdit.uid), {
+        displayName: editFormData.displayName,
+        role: editFormData.role,
+        department: editFormData.department,
+        phone: editFormData.phone,
+        updatedAt: Timestamp.now(),
+        updatedBy: currentUser.uid,
+      });
+
+      // If password change requested, show alert
+      if (editFormData.newPassword) {
+        alert(
+          `✅ User Updated Successfully!\n\n` +
+          `Name: ${editFormData.displayName}\n` +
+          `New Password: ${editFormData.newPassword}\n` +
+          `Role: ${editFormData.role}\n\n` +
+          `⚠️ Note: Password update in Firebase Auth requires backend implementation.\n` +
+          `Please share the new password securely with the user.`
+        );
+      }
+
+      // Create notification for edited user
+      await createNotification(
+        userToEdit.uid,
+        'Profile Updated',
+        `Your profile has been updated by ${currentUser.displayName || 'Admin'}`,
+        'user'
+      );
+
+      setSuccess(`${editFormData.displayName} has been updated successfully`);
+      setShowEditModal(false);
+      setUserToEdit(null);
+      resetEditForm();
+      fetchUsers();
+
+      setTimeout(() => setSuccess(''), 3000);
+    } catch (error) {
+      console.error('Error updating user:', error);
+      setError('Failed to update user');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleDeleteUser = async () => {
     if (!userToDelete || !currentUser) return;
 
@@ -163,9 +245,6 @@ export const Team = () => {
     try {
       // Delete user document from Firestore
       await deleteDoc(doc(db, 'users', userToDelete.uid));
-      
-      // Note: To delete from Firebase Auth, you need Admin SDK on backend
-      // For now, we're just deleting from Firestore
       
       setSuccess(`${userToDelete.displayName} has been removed from the team`);
       setShowDeleteModal(false);
@@ -194,6 +273,31 @@ export const Team = () => {
     setShowPassword(false);
   };
 
+  const resetEditForm = () => {
+    setEditFormData({
+      displayName: '',
+      role: 'member',
+      department: '',
+      phone: '',
+      newPassword: '',
+    });
+    setShowPassword(false);
+  };
+
+  // ✅ NEW: Open edit modal with user data
+  const openEditModal = (user: User) => {
+    setUserToEdit(user);
+    setEditFormData({
+      displayName: user.displayName,
+      role: user.role,
+      department: user.department || '',
+      phone: user.phone || '',
+      newPassword: '',
+    });
+    setShowEditModal(true);
+    setError('');
+  };
+
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
     setSuccess('Password copied to clipboard!');
@@ -204,6 +308,11 @@ export const Team = () => {
     if (userRole === 'superadmin') return user.uid !== currentUser?.uid;
     if (userRole === 'admin') return user.role === 'member' && user.uid !== currentUser?.uid;
     return false;
+  };
+
+  // ✅ NEW: Only SuperAdmin can edit users
+  const canEditUser = (user: User) => {
+    return userRole === 'superadmin' && user.uid !== currentUser?.uid;
   };
 
   const getRoleColor = (role: string) => {
@@ -241,7 +350,7 @@ export const Team = () => {
         </div>
       )}
 
-      {error && !showModal && (
+      {error && !showModal && !showEditModal && (
         <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg">
           <p className="text-sm text-red-600">{error}</p>
         </div>
@@ -278,18 +387,31 @@ export const Team = () => {
                     <Shield className="h-3 w-3 mr-1" />
                     {user.role.toUpperCase()}
                   </span>
-                  {canDeleteUser(user) && (
-                    <button
-                      onClick={() => {
-                        setUserToDelete(user);
-                        setShowDeleteModal(true);
-                      }}
-                      className="p-1.5 text-red-600 hover:bg-red-50 rounded transition-colors"
-                      title="Remove user"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  )}
+                  <div className="flex items-center space-x-1">
+                    {/* ✅ Edit Button (SuperAdmin Only) */}
+                    {canEditUser(user) && (
+                      <button
+                        onClick={() => openEditModal(user)}
+                        className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition-colors"
+                        title="Edit user"
+                      >
+                        <Edit2 className="h-4 w-4" />
+                      </button>
+                    )}
+                    {/* Delete Button */}
+                    {canDeleteUser(user) && (
+                      <button
+                        onClick={() => {
+                          setUserToDelete(user);
+                          setShowDeleteModal(true);
+                        }}
+                        className="p-1.5 text-red-600 hover:bg-red-50 rounded transition-colors"
+                        title="Remove user"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
@@ -462,6 +584,164 @@ export const Team = () => {
                 disabled={loading || !formData.email || !formData.displayName || !formData.password}
               >
                 {loading ? 'Creating...' : 'Add Member'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ✅ NEW: Edit User Modal (SuperAdmin Only) */}
+      {showEditModal && userToEdit && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 max-h-[90vh] overflow-y-auto">
+            <h2 className="text-2xl font-bold text-gray-900 mb-6">Edit Team Member</h2>
+            
+            {error && (
+              <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg">
+                <p className="text-sm text-red-600">{error}</p>
+              </div>
+            )}
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Email (Cannot be changed)
+                </label>
+                <input
+                  type="email"
+                  value={userToEdit.email}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg bg-gray-100 cursor-not-allowed"
+                  disabled
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Full Name *
+                </label>
+                <input
+                  type="text"
+                  value={editFormData.displayName}
+                  onChange={(e) => setEditFormData({ ...editFormData, displayName: e.target.value })}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  placeholder="John Doe"
+                  disabled={loading}
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  New Password (Optional)
+                </label>
+                <div className="relative">
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    value={editFormData.newPassword}
+                    onChange={(e) => setEditFormData({ ...editFormData, newPassword: e.target.value })}
+                    className="w-full px-4 py-2 pr-20 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    placeholder="Leave blank to keep current"
+                    disabled={loading}
+                    minLength={6}
+                  />
+                  <div className="absolute right-2 top-1/2 transform -translate-y-1/2 flex items-center space-x-1">
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="p-1.5 text-gray-400 hover:text-gray-600"
+                      title={showPassword ? 'Hide password' : 'Show password'}
+                    >
+                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                    {editFormData.newPassword && (
+                      <button
+                        type="button"
+                        onClick={() => copyToClipboard(editFormData.newPassword)}
+                        className="p-1.5 text-gray-400 hover:text-gray-600"
+                        title="Copy password"
+                      >
+                        <Copy className="h-4 w-4" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center justify-between mt-2">
+                  <p className="text-xs text-gray-500">Leave blank to keep current password</p>
+                  <button
+                    type="button"
+                    onClick={generateEditPassword}
+                    className="text-xs text-primary-600 hover:text-primary-700 font-medium"
+                    disabled={loading}
+                  >
+                    Generate Password
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Role *
+                </label>
+                <select
+                  value={editFormData.role}
+                  onChange={(e) => setEditFormData({ ...editFormData, role: e.target.value as any })}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  disabled={loading}
+                >
+                  <option value="member">Member</option>
+                  <option value="admin">Admin</option>
+                  <option value="superadmin">Super Admin</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Department
+                </label>
+                <input
+                  type="text"
+                  value={editFormData.department}
+                  onChange={(e) => setEditFormData({ ...editFormData, department: e.target.value })}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  placeholder="Engineering, Marketing, etc."
+                  disabled={loading}
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Phone
+                </label>
+                <input
+                  type="tel"
+                  value={editFormData.phone}
+                  onChange={(e) => setEditFormData({ ...editFormData, phone: e.target.value })}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  placeholder="+91 1234567890"
+                  disabled={loading}
+                />
+              </div>
+            </div>
+
+            <div className="flex space-x-3 mt-6">
+              <button
+                onClick={() => {
+                  setShowEditModal(false);
+                  setUserToEdit(null);
+                  setError('');
+                  resetEditForm();
+                }}
+                className="flex-1 btn-secondary"
+                disabled={loading}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleEditUser}
+                className="flex-1 btn-primary disabled:opacity-50"
+                disabled={loading || !editFormData.displayName}
+              >
+                {loading ? 'Updating...' : 'Update Member'}
               </button>
             </div>
           </div>

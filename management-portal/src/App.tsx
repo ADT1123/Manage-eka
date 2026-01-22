@@ -4,7 +4,6 @@ import { NotificationProvider } from './contexts/NotificationContext';  // ← A
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { Layout } from './components/layout/Layout';
 import { Login } from './pages/Login';
-import { Setup } from './pages/Setup';
 import { Dashboard } from './pages/dashboard.tsx';  // ← Fix: Capital D
 import { Tasks } from './pages/Tasks';
 import { Team } from './pages/Team';
@@ -17,7 +16,6 @@ function App() {
       <NotificationProvider>  {/* ← Add this wrapper */}
         <BrowserRouter>
           <Routes>
-            <Route path="/setup" element={<Setup />} />
             <Route path="/login" element={<Login />} />
             <Route
               path="/dashboard"
