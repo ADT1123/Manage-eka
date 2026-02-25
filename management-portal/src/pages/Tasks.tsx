@@ -1,3 +1,4 @@
+// src/components/Tasks.tsx
 import { useEffect, useState } from 'react';
 import { 
   collection, 
@@ -472,7 +473,10 @@ export const Tasks = () => {
     }
   };
 
-  const handleStatusChange = async (taskId: string, newStatus: 'pending' | 'in-progress' | 'completed') => {
+  const handleStatusChange = async (
+    taskId: string,
+    newStatus: 'pending' | 'in-progress' | 'completed'
+  ) => {
     try {
       const task = tasks.find(t => t.id === taskId);
       if (!task) return;
@@ -552,7 +556,8 @@ export const Tasks = () => {
         setSuccess('Status updated successfully!');
       }
 
-      fetchTasks();
+      // UI ko turant fresh data se sync karo
+      await fetchTasks();
       setTimeout(() => setSuccess(''), 3000);
     } catch (error) {
       console.error('Error updating status:', error);
@@ -1027,9 +1032,10 @@ export const Tasks = () => {
               <div className="pt-4 border-t border-gray-200">
                 <label className="block text-sm font-medium text-gray-700 mb-2">Update Status</label>
                 <select
-                  value={selectedTask.status}
-                  onChange={(e) => {
-                    handleStatusChange(selectedTask.id, e.target.value as any);
+                  defaultValue={selectedTask.status}
+                  onChange={async (e) => {
+                    const newStatus = e.target.value as 'pending' | 'in-progress' | 'completed';
+                    await handleStatusChange(selectedTask.id, newStatus);
                     setShowDetailModal(false);
                   }}
                   className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
@@ -1189,7 +1195,7 @@ export const Tasks = () => {
                       <label className="flex items-center p-2 hover:bg-gray-50 rounded cursor-pointer mb-2">
                         <input
                           type="checkbox"
-                          checked={selectedUsers.length === users.length}
+                          checked={selectedUsers.length === users.length && users.length > 0}
                           onChange={() => handleUserSelection('all')}
                           className="h-4 w-4 text-primary-600 rounded focus:ring-primary-500"
                         />
